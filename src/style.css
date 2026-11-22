@@ -751,7 +751,11 @@ h3 {
 .analytics-percent { text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .analytics-consumed { color: #C5A75A; }
 .analytics-expired { color: #C78B8B; }
-.analytics-expand { height: 29px; width: 29px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: var(--muted); font-size: 19px; }
+.analytics-expand { height: 30px; width: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.analytics-expand:hover, .analytics-expand:focus-visible { color: var(--text); background: var(--soft); }
+.analytics-expand:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.analytics-expand[aria-expanded="true"] { color: var(--accent, #25B88A); }
+.analytics-chart-icon { display: block; flex-shrink: 0; }
 .analytics-bar { display: flex; gap: 3px; width: 100%; height: 7px; margin-top: 11px; }
 .analytics-bar > span { display: block; min-width: 0; height: 7px; border-radius: 99px; }
 .analytics-bar > span[style*="width:0%"] { display: none; }
