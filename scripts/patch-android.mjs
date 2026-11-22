@@ -8,7 +8,7 @@ const mainActivity = join(root, "android/app/src/main/java/com/personal/resource
 const mainActivityTemplate = join(root, "android-patches/MainActivity.java");
 const manifest = join(root, "android/app/src/main/AndroidManifest.xml");
 const source = await readFile(mainActivityTemplate, "utf8");
-if (!source.includes("resource-manager:native-back") || !source.includes("OnBackPressedDispatcher")) {
+if (!source.includes("__resourceManagerBack") || !source.includes("OnBackInvokedDispatcher")) {
   throw new Error("Invalid native MainActivity template. Stopping build.");
 }
 await mkdir(join(root, "android/app/src/main/java/com/personal/resourcemanager"), {recursive:true});
