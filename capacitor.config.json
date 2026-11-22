@@ -1,6 +1,13 @@
 {
-  "appId":"com.personal.resourcemanager",
-  "appName":"Resource Manager",
-  "webDir":"dist",
-  "bundledWebRuntime":false
+  "appId": "com.personal.resourcemanager",
+  "appName": "Resource Manager",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": false,
+      "backgroundColor": "#f6f8fc",
+      "style": "DARK"
+    }
+  }
 }
