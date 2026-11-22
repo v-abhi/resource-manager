@@ -1,13 +1,14 @@
 {
   "name": "resource-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "build:android": "cross-env BUILD_TARGET=android vite build"
+    "build:android": "cross-env BUILD_TARGET=android vite build",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^7.0.0",
