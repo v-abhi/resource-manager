@@ -2,7 +2,7 @@ import "./style.css";
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { backTarget } from "./navigation-logic.js";
-import { StatusBar } from "@capacitor/status-bar";
+import { StatusBar, Style } from "@capacitor/status-bar";
 import { syncReminders, reminderSupported, showTestReminder } from "./reminders.js";
 import {
   resources,
@@ -89,16 +89,29 @@ function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
   updateStatusBar().catch(console.warn);
 }
+
 async function updateStatusBar() {
   if (!Capacitor.isNativePlatform()) return;
+
+  const systemDark = window.matchMedia(
+    "(prefers-color-scheme: dark)"
+  ).matches;
+
+  const isDark =
+    state.theme === "dark" ||
+    (state.theme === "system" && systemDark);
+
   await StatusBar.show();
-  // On Android 15+ our native container receives WindowInsets. The top
-  // system-bar strip is light in both themes so Android icons must be dark.
-  // setOverlaysWebView(false) alone does not fix Android 15+ edge-to-edge.
-  await StatusBar.setOverlaysWebView({ overlay: false });
-  await StatusBar.setBackgroundColor({ color: "#f6f8fc" });
-  // Native MainActivity controls the icon foreground; avoid plugin races.
+
+  await StatusBar.setOverlaysWebView({
+    overlay: false
+  });
+
+  await StatusBar.setStyle({
+    style: isDark ? Style.Dark : Style.Light
+  });
 }
+
 function closeSheetImmediately() {
   const sheet = document.querySelector("#sheet-root");
   if (!sheet?.querySelector(".action-sheet")) return false;
