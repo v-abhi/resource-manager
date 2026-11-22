@@ -35,6 +35,7 @@ const state = {
   customFrom: "",
   customTo: "",
   expanded: null,
+  listPrefs: { home: { sort: "manual", frequency: "all" }, analytics: { sort: "manual", frequency: "all" }, all: { sort: "az" } },
 };
 const esc = (s) =>
   String(s ?? "").replace(
@@ -89,6 +90,51 @@ function go(page,id=null) {
   render();
   window.scrollTo({top:0,behavior:"instant"});
 }
+const frequencyOptions = ["all", "hourly", "daily", "weekly", "monthly", "yearly"];
+const sortOptions = [
+  ["manual", "My order"], ["az", "Name A–Z"], ["za", "Name Z–A"],
+  ["low", "Lowest remaining %"], ["high", "Highest remaining %"],
+  ["used", "Highest consumed %"], ["expired", "Highest expired %"],
+];
+function listControls(page) {
+  const prefs = state.listPrefs[page];
+  const options = page === "all" ? [["az", "Name A–Z"], ["za", "Name Z–A"]] : page === "home" ? sortOptions.filter(([value]) => value !== "expired") : sortOptions;
+  return `<div class="list-controls"><label class="list-control"><span>Sort</span><select data-list-sort="${page}" aria-label="Sort resources">${options.map(([value,label]) => `<option value="${value}" ${prefs.sort===value?"selected":""}>${label}</option>`).join("")}</select></label>${page === "all" ? "" : `<label class="list-control"><span>Show</span><select data-list-frequency="${page}" aria-label="Filter by replenishment period">${frequencyOptions.map(value => `<option value="${value}" ${prefs.frequency===value?"selected":""}>${value === "all" ? "All periods" : value.charAt(0).toUpperCase()+value.slice(1)}</option>`).join("")}</select></label>`}</div>`;
+}
+function wireListControls() {
+  document.querySelectorAll("[data-list-sort]").forEach(select => select.onchange = () => {
+    state.listPrefs[select.dataset.listSort].sort = select.value;
+    render();
+  });
+  document.querySelectorAll("[data-list-frequency]").forEach(select => select.onchange = () => {
+    state.listPrefs[select.dataset.listFrequency].frequency = select.value;
+    render();
+  });
+}
+function orderedResources(list, page, statsFor = null) {
+  const prefs = state.listPrefs[page];
+  const filtered = list.filter(r => !prefs.frequency || prefs.frequency === "all" || r.frequency === prefs.frequency);
+  if (prefs.sort === "manual") return filtered;
+  const getStats = r => {
+    if (statsFor) {
+      const stats = statsFor(r);
+      return { remaining: Math.max(0, 100 - stats.consumedPct - stats.expiredPct), used: stats.consumedPct, expired: stats.expiredPct };
+    }
+    const e = evaluate(r, logOf(r.id));
+    const p = e.periods.at(-1);
+    const base = Math.max(0, (p?.opening ?? Number(r.initial)) + (p?.added ?? 0));
+    const remaining = base > 0 ? Math.max(0, Math.min(100, 100 * e.available / base)) : 0;
+    return { remaining, used: base > 0 ? 100 * (p?.used ?? 0) / base : 0, expired: base > 0 ? 100 * (p?.lost ?? 0) / base : 0 };
+  };
+  return [...filtered].sort((a,b) => {
+    if (prefs.sort === "az") return a.name.localeCompare(b.name);
+    if (prefs.sort === "za") return b.name.localeCompare(a.name);
+    const av = getStats(a), bv = getStats(b);
+    const key = prefs.sort === "low" || prefs.sort === "high" ? "remaining" : prefs.sort === "expired" ? "expired" : "used";
+    const difference = (prefs.sort === "low" ? av[key] - bv[key] : bv[key] - av[key]);
+    return difference || a.name.localeCompare(b.name);
+  });
+}
 function card(r,now=new Date()) {
   const s=evaluate(r,logOf(r.id),now), p=s.periods.at(-1), st=status(r,now);
   const available=Math.max(0,st==="Scheduled"?Number(r.initial):s.available);
@@ -99,8 +145,9 @@ function card(r,now=new Date()) {
   return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now">${unit(available,r)} <small>(${pct}%)</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
 }
 function home() {
-  const now=new Date(),active=state.resources.filter(r=>!r.archived && status(r,now)==="Active");
-  shell(`${active.length?`<div class="compact-stack">${active.map(r=>card(r,now)).join("")}</div>`:`<div class="empty"><h3>No active resources</h3><p>Create a resource to start tracking.</p><button class="primary" id="create-first">Create resource</button></div>`}<div class="legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot green"></i>Remaining</span></div>`);
+  const now=new Date(),active=orderedResources(state.resources.filter(r=>!r.archived && status(r,now)==="Active"), "home");
+  shell(`${listControls("home")}${active.length?`<div class="compact-stack">${active.map(r=>card(r,now)).join("")}</div>`:`<div class="empty"><h3>No active resources</h3><p>Create a resource to start tracking.</p><button class="primary" id="create-first">Create resource</button></div>`}<div class="legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot green"></i>Remaining</span></div>`);
+  wireListControls();
   $("#create-first")?.addEventListener("click",()=>go("edit"));
   document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>openSheet(b.dataset.open));
 }
@@ -119,8 +166,9 @@ function openSheet(id) {
   $("#quick-amount").focus();
 }
 function all() {
-  const list=state.resources.filter(r=>state.showHidden||!r.archived);
-  shell(`<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
+  const list=orderedResources(state.resources.filter(r=>state.showHidden||!r.archived), "all");
+  shell(`${listControls("all")}<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
+  wireListControls();
   $("#show-all").onchange=e=>{state.showHidden=e.target.checked;render()};
   document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>go("edit",b.dataset.edit));
   document.querySelectorAll("[data-menu]").forEach(b=>b.onclick=async()=>{const r=getR(b.dataset.menu);if(!r)return;const choice=prompt(`${r.name}\nType ${r.archived?'RESTORE':'ARCHIVE'} to ${r.archived?'restore':'archive'} or DELETE to permanently remove:`);if(!choice)return;const action=choice.trim().toUpperCase();if(action===(r.archived?"RESTORE":"ARCHIVE")){await saveResource({...r,archived:!r.archived});await refresh();notify(r.archived?"Resource restored.":"Resource archived.")}else if(action==="DELETE"&&confirm(`Permanently delete ${r.name} and all its logs?`)){await removeResource(r.id);await refresh();notify("Resource deleted.")}});
@@ -182,7 +230,7 @@ function analyticsStats(r, range) {
 function analytics() {
   const range = analyticsRange();
   const mode = state.analyticsMode;
-  const resourcesList = state.resources.filter(r => !r.archived);
+  const resourcesList = orderedResources(state.resources.filter(r => !r.archived), "analytics", range ? r => analyticsStats(r, range) : null);
   const selector = `<div class="period-tabs analytics-tabs">${["7D","30D","90D","Custom"].map(n => `<button data-period="${n}" class="${mode === n ? 'selected' : ''}">${n}</button>`).join('')}</div>`;
   const custom = mode === "Custom" ? `<form id="analytics-custom" class="analytics-custom"><label>From<input id="analytics-from" type="date" max="${today()}" value="${esc(state.customFrom)}" required></label><label>To<input id="analytics-to" type="date" max="${today()}" value="${esc(state.customTo)}" required></label><button type="submit" class="primary">Apply</button></form>` : '';
   const list = range ? resourcesList.map(r => {
@@ -190,7 +238,8 @@ function analytics() {
     const open = state.expanded === r.id;
     return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}"><svg class="analytics-chart-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg></button></div><div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${stats.consumedPct}%"></span><span class="analytics-bar-expired" style="width:${stats.expiredPct}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-stats.consumedPct-stats.expiredPct)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
   }).join('') : '<div class="empty">Choose a valid date range and tap Apply.</div>';
-  shell(`${selector}${custom}<div class="analytics-legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot red"></i>Expired</span></div><div class="compact-stack">${list || '<div class="empty">No resources yet.</div>'}</div>`);
+  shell(`${selector}${custom}${listControls("analytics")}<div class="analytics-legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot red"></i>Expired</span></div><div class="compact-stack">${list || '<div class="empty">No resources yet.</div>'}</div>`);
+  wireListControls();
   document.querySelectorAll('[data-period]').forEach(b => b.onclick = () => {
     state.analyticsMode = b.dataset.period;
     if (state.analyticsMode === 'Custom' && !state.customFrom) {

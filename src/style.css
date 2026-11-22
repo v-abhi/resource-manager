@@ -808,3 +808,10 @@ h3 {
   }
   .compact-frequency, .compact-metric-label { font-size: 9px; }
 }
+
+/* Compact sorting and replenishment filters */
+.list-controls { display: flex; gap: 8px; align-items: end; margin: 0 0 12px; }
+.list-control { display: flex; flex: 1 1 0; flex-direction: column; gap: 4px; min-width: 0; }
+.list-control > span { color: var(--muted, #8993a2); font-size: 11px; }
+.list-control select { width: 100%; min-width: 0; padding: 9px 28px 9px 10px; border: 1px solid var(--border, #344154); border-radius: 10px; background: var(--card, transparent); color: inherit; font: inherit; font-size: 12px; text-overflow: ellipsis; }
+.list-control option { color: #172334; background: #fff; }
