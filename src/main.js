@@ -2,7 +2,7 @@ import "./style.css";
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { backTarget } from "./navigation-logic.js";
-import { StatusBar, Style } from "@capacitor/status-bar";
+import { StatusBar } from "@capacitor/status-bar";
 import { syncReminders, reminderSupported, showTestReminder } from "./reminders.js";
 import {
   resources,
@@ -97,7 +97,7 @@ async function updateStatusBar() {
   // setOverlaysWebView(false) alone does not fix Android 15+ edge-to-edge.
   await StatusBar.setOverlaysWebView({ overlay: false });
   await StatusBar.setBackgroundColor({ color: "#f6f8fc" });
-  await StatusBar.setStyle({ style: Style.Dark });
+  // Native MainActivity controls the icon foreground; avoid plugin races.
 }
 function closeSheetImmediately() {
   const sheet = document.querySelector("#sheet-root");
@@ -117,9 +117,13 @@ function navigateBack() {
 }
 function setupAndroidBack() {
   if (!Capacitor.isNativePlatform()) return;
-  // Listen ONLY to our native callback. Registering an extra Capacitor
-  // backButton handler can steal dispatcher priority on Android 15+.
+  // This is invoked directly by MainActivity for modern Android back gestures.
+  // Register before awaiting database initialization to avoid any dead period.
+  window.__resourceManagerBack = navigateBack;
   window.addEventListener("resource-manager:native-back", navigateBack);
+  // Capacitor's own listener covers devices where native gesture dispatch
+  // enters the plugin rather than our MainActivity callback.
+  App.addListener("backButton", navigateBack).catch(console.warn);
 }
 async function refresh() {
   state.resources = (await resources()).map(r => ({...r, allowNegative: isFlexible(r)}));
@@ -430,7 +434,7 @@ function edit() {
 }
 function settings() {
   shell(
-    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Daily reminders 🔔</h2><p class="muted small">Two optional local notifications with a snapshot of active resource balances. Times use your phone clock.</p><label class="reminder-row"><span>Morning reminder</span><input type="checkbox" id="morning-on" ${state.reminders.morning?"checked":""}/></label><label class="field">Morning time<input type="time" id="morning-time" value="${esc(state.reminders.morningTime)}"/></label><label class="reminder-row"><span>Evening reminder</span><input type="checkbox" id="evening-on" ${state.reminders.evening?"checked":""}/></label><label class="field">Evening time<input type="time" id="evening-time" value="${esc(state.reminders.eveningTime)}"/></label><button class="secondary wide" id="save-reminders">Save reminder settings</button><button class="secondary wide" id="test-reminder">Send test notification</button><p class="muted small">${reminderSupported()?"Android local notifications available. Allow notifications when prompted.":"Reminder times can be saved here; scheduled notifications require the Android APK."} Notifications show the latest snapshot saved when the app was last opened or updated.</p></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1.1 · Android Safe Bar + Back Fix · Offline-first.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
+    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Daily reminders 🔔</h2><p class="muted small">Two optional local notifications with a snapshot of active resource balances. Times use your phone clock.</p><label class="reminder-row"><span>Morning reminder</span><input type="checkbox" id="morning-on" ${state.reminders.morning?"checked":""}/></label><label class="field">Morning time<input type="time" id="morning-time" value="${esc(state.reminders.morningTime)}"/></label><label class="reminder-row"><span>Evening reminder</span><input type="checkbox" id="evening-on" ${state.reminders.evening?"checked":""}/></label><label class="field">Evening time<input type="time" id="evening-time" value="${esc(state.reminders.eveningTime)}"/></label><button class="secondary wide" id="save-reminders">Save reminder settings</button><button class="secondary wide" id="test-reminder">Send test notification</button><p class="muted small">${reminderSupported()?"Android local notifications available. Allow notifications when prompted.":"Reminder times can be saved here; scheduled notifications require the Android APK."} Notifications show the latest snapshot saved when the app was last opened or updated.</p></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1.2 · Android Safe Bar + Back Fix · Offline-first.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
   );
   $("#save-reminders").onclick = async () => {
     state.reminders = { morning: $("#morning-on").checked, morningTime: $("#morning-time").value, evening: $("#evening-on").checked, eveningTime: $("#evening-time").value };
