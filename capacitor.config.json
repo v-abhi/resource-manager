@@ -1,3 +1,4 @@
+
 {
   "appId": "com.personal.resourcemanager",
   "appName": "Resource Manager",
@@ -7,7 +8,7 @@
     "StatusBar": {
       "overlaysWebView": false,
       "backgroundColor": "#f6f8fc",
-      "style": "DARK"
+      "style": "LIGHT"
     }
   }
 }
