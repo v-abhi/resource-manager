@@ -99,7 +99,7 @@ export function evaluate(r, logs = [], until = new Date()) {
       carried = balance;
     if (rolled || ended) {
       carried = ended ? 0 : round(balance * carry);
-      lost = round(balance - carried);
+      lost = round(Math.max(0, balance) * (1 - carry));
       expired = round(expired + lost);
       balance = carried;
     }

@@ -815,3 +815,7 @@ h3 {
 .list-control > span { color: var(--muted, #8993a2); font-size: 11px; }
 .list-control select { width: 100%; min-width: 0; padding: 9px 28px 9px 10px; border: 1px solid var(--border, #344154); border-radius: 10px; background: var(--card, transparent); color: inherit; font: inherit; font-size: 12px; text-overflow: ellipsis; }
 .list-control option { color: #172334; background: #fff; }
+
+.negative-balance { color: #d47e80 !important; }
+.reminder-row { display:flex; justify-content:space-between; align-items:center; margin:12px 0 5px; font-size:14px; }
+.reminder-row input { width:18px; height:18px; accent-color:#25B88A; }

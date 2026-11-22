@@ -1,4 +1,5 @@
 import "./style.css";
+import { syncReminders, reminderSupported, showTestReminder } from "./reminders.js";
 import {
   resources,
   logsFor,
@@ -27,6 +28,7 @@ const state = {
   resources: [],
   logs: [],
   theme: "system",
+  reminders: { morning: false, morningTime: "06:00", evening: false, eveningTime: "18:00" },
   from: "",
   to: "",
   showHidden: false,
@@ -76,6 +78,7 @@ async function refresh() {
   state.resources = await resources();
   state.logs = await allLogs();
   render();
+  syncReminders(state.reminders, state.resources, state.logs).catch(console.warn);
 }
 function shell(content) {
   const labels = { home: "My Resources", analytics: "Analytics", all: "Resources", edit: "Resource setup", settings: "Settings" };
@@ -137,12 +140,12 @@ function orderedResources(list, page, statsFor = null) {
 }
 function card(r,now=new Date()) {
   const s=evaluate(r,logOf(r.id),now), p=s.periods.at(-1), st=status(r,now);
-  const available=Math.max(0,st==="Scheduled"?Number(r.initial):s.available);
+  const available=st==="Scheduled"?Number(r.initial):s.available;
   // Opening allocation plus manual additions during this window.
   const allocation=Math.max(0,(p?.opening??Number(r.initial))+(p?.added??0));
   const pct=allocation>0?Math.max(0,Math.min(100,Math.round(available/allocation*100))):0;
   const frequencyLabel = ({ hourly: "Hourly", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" })[r.frequency] || r.frequency || "—";
-  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now">${unit(available,r)} <small>(${pct}%)</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
+  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now ${available<0?"negative-balance":""}">${unit(available,r)} <small>(${available<0?"Over budget":pct+"%"})</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
 }
 function home() {
   const now=new Date(),active=orderedResources(state.resources.filter(r=>!r.archived && status(r,now)==="Active"), "home");
@@ -159,10 +162,10 @@ function openSheet(id) {
   let kind="consume";
   const close=()=>{root.querySelector(".action-sheet")?.classList.add("closing");root.querySelector(".sheet-backdrop")?.classList.add("closing");setTimeout(()=>root.replaceChildren(),230)};
   $("#sheet-backdrop").onclick=close;$("#close-sheet").onclick=close;
-  const update=()=>{const amount=Number($("#quick-amount").value);$("#preview-value").textContent=$("#quick-amount").value&&amount>0?unit(Math.max(0,s.available+(kind==="add"?amount:-amount)),r):"—";};
+  const update=()=>{const amount=Number($("#quick-amount").value);$("#preview-value").textContent=$("#quick-amount").value&&amount>0?unit(s.available+(kind==="add"?amount:-amount),r):"—";};
   $("#quick-amount").oninput=update;
   root.querySelectorAll("[data-kind]").forEach(b=>b.onclick=()=>{kind=b.dataset.kind;root.querySelectorAll("[data-kind]").forEach(x=>x.classList.toggle("selected",x===b));root.querySelector("button[type=submit]").textContent=kind==="consume"?"Confirm consumption":"Confirm addition";update()});
-  $("#quick-log").onsubmit=async e=>{e.preventDefault();const amount=Number($("#quick-amount").value);if(!Number.isFinite(amount)||amount<=0)return notify("Enter a positive quantity.",true);const current=evaluate(r,logOf(id)).available;if(kind==="consume"&&amount>current+1e-6)return notify("Quantity exceeds available balance.",true);await saveLog({id:unique(),resourceId:id,kind,amount:round(amount),timestamp:new Date().toISOString()});root.replaceChildren();await refresh();notify("Resource updated.")};
+  $("#quick-log").onsubmit=async e=>{e.preventDefault();const amount=Number($("#quick-amount").value);if(!Number.isFinite(amount)||amount<=0)return notify("Enter a positive quantity.",true);const current=evaluate(r,logOf(id)).available;if(kind==="consume"&&!r.allowNegative&&amount>current+1e-6)return notify("Quantity exceeds available balance.",true);await saveLog({id:unique(),resourceId:id,kind,amount:round(amount),timestamp:new Date().toISOString()});root.replaceChildren();await refresh();notify("Resource updated.")};
   $("#quick-amount").focus();
 }
 function all() {
@@ -211,19 +214,20 @@ function analyticsStats(r, range) {
   }
   const consumed = round([...dayUsed.values()].reduce((a, b) => a + b, 0));
   // Closed periods are counted by their actual ending date, not by the current balance.
-  const expired = round(result.periods.filter(p => p.closed &&
+  const expired = Math.max(0, round(result.periods.filter(p => p.closed &&
     localDay(new Date(p.end)) >= range.fromKey &&
-    localDay(new Date(p.end)) <= range.toKey).reduce((sum, p) => sum + p.lost, 0));
+    localDay(new Date(p.end)) <= range.toKey).reduce((sum, p) => sum + p.lost, 0)));
   // Available balance is unresolved only if this reporting window reaches the present.
   const unresolved = range.toKey === localDay(new Date()) ? Math.max(0, result.available) : 0;
   const total = round(consumed + expired + unresolved);
-  const consumedPct = total > 0 ? 100 * consumed / total : 0;
-  const expiredPct = total > 0 ? 100 * expired / total : 0;
+  const windowAllocation = Math.max(0, result.periods.filter(p => localDay(new Date(p.end)) >= range.fromKey && localDay(new Date(p.start)) <= range.toKey).reduce((sum,p) => sum + Math.max(0,p.opening+p.added),0));
+  const consumedPct = windowAllocation > 0 ? 100 * consumed / windowAllocation : (total > 0 ? 100 * consumed / total : 0);
+  const expiredPct = windowAllocation > 0 ? 100 * expired / windowAllocation : 0;
   const trend = range.keys.map(key => {
     const used = dayUsed.get(key) || 0;
     const periods = result.periods.filter(p => localDay(new Date(p.start)) <= key && localDay(new Date(p.end)) >= key);
     const base = periods.reduce((sum, p) => sum + Math.max(0, p.opening + p.added), 0);
-    return { date: key, used, pct: base > 0 ? Math.min(100, 100 * used / base) : 0 };
+    return { date: key, used, pct: base > 0 ? 100 * used / base : 0 };
   });
   return { consumed, expired, unresolved, total, consumedPct, expiredPct, trend };
 }
@@ -236,7 +240,7 @@ function analytics() {
   const list = range ? resourcesList.map(r => {
     const stats = analyticsStats(r, range);
     const open = state.expanded === r.id;
-    return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}"><svg class="analytics-chart-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg></button></div><div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${stats.consumedPct}%"></span><span class="analytics-bar-expired" style="width:${stats.expiredPct}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-stats.consumedPct-stats.expiredPct)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
+    return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}"><svg class="analytics-chart-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg></button></div><div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${Math.min(100,stats.consumedPct)}%"></span><span class="analytics-bar-expired" style="width:${Math.min(100,stats.expiredPct)}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-stats.consumedPct-stats.expiredPct)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
   }).join('') : '<div class="empty">Choose a valid date range and tap Apply.</div>';
   shell(`${selector}${custom}${listControls("analytics")}<div class="analytics-legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot red"></i>Expired</span></div><div class="compact-stack">${list || '<div class="empty">No resources yet.</div>'}</div>`);
   wireListControls();
@@ -266,7 +270,8 @@ function analyticsDetail(r, stats, range) {
   const { total, consumed, expired, unresolved, trend } = stats;
   const days = trend.length;
   const W = 340, left = 38, right = 330, top = 12, bottom = 130;
-  const points = trend.map((d, i) => ({ x: left + i * (right - left) / Math.max(1, days - 1), y: bottom - d.pct * (bottom - top) / 100, ...d }));
+  const maxY = Math.max(100, Math.ceil(Math.max(...trend.map(d => d.pct), 100) / 25) * 25);
+  const points = trend.map((d, i) => ({ x: left + i * (right - left) / Math.max(1, days - 1), y: bottom - d.pct * (bottom - top) / maxY, ...d }));
   const path = points.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
   const sundays = points.filter(p => new Date(`${p.date}T12:00:00`).getDay() === 0);
   const step = days <= 7 ? 1 : days <= 45 ? 1 : Math.max(2, Math.ceil(sundays.length / 7));
@@ -275,8 +280,9 @@ function analyticsDetail(r, stats, range) {
     const d = new Date(`${p.date}T12:00:00`);
     return `<text x="${p.x}" y="151" text-anchor="middle" font-size="${days <= 7 ? 9 : 10}" fill="currentColor" opacity=".65">${days <= 7 ? d.getDate() : `${d.getDate()} ${d.toLocaleString('en-GB', {month:'short'})}`}</text>`;
   }).join('');
-  const grid = [0,25,50,75,100].map(v => {
-    const y = bottom - v * (bottom - top) / 100;
+  const grid = [0, .25, .5, .75, 1].map(f => {
+    const v = Math.round(f * maxY);
+    const y = bottom - f * (bottom - top);
     return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".12" stroke-dasharray="3 4"/><text x="30" y="${y + 3}" text-anchor="end" font-size="10" fill="currentColor" opacity=".55">${v}%</text>`;
   }).join('');
   const dots = days <= 7 ? points.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="#E9B949"/>`).join('') : '';
@@ -296,19 +302,21 @@ function edit() {
     frequency: "daily",
     refill: 2,
     carry: 0,
+    allowNegative: false,
     start: localStamp(now),
     end: localStamp(end),
     moneyRate: 0,
     timeRate: 0,
   };
   shell(
-    `<div class="section-head"><button class="text-btn" id="back">← Back</button></div><div class="panel"><h2>${existing ? "Edit resource" : "Create resource"}</h2><p class="muted small">One resource = one independently configured balance.</p><form id="resource-form"><label class="field">Resource name<input name="name" required maxlength="65" value="${esc(r.name)}" placeholder="e.g. Airtel Data"/></label><div class="fields-2"><label class="field">Symbol / Emoji<input name="emoji" maxlength="6" value="${esc(r.emoji)}" placeholder="📶"/></label><label class="field">Unit<input name="unit" required maxlength="18" value="${esc(r.unit)}" placeholder="GB, ₹, min"/></label></div><label class="field">Starting quantity<input name="initial" type="number" min="0" step="any" required value="${esc(r.initial)}"/></label><label class="field">Resource window<select name="frequency">${["hourly", "daily", "weekly", "monthly"].map((f) => `<option value="${f}" ${r.frequency === f ? "selected" : ""}>${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join("")}</select></label><div class="fields-2"><label class="field">Replenish each window<input name="refill" type="number" min="0" step="any" required value="${esc(r.refill)}"/></label><label class="field">Carry forward (%)<input name="carry" type="number" min="0" max="100" step="any" required value="${esc(r.carry)}"/></label></div><div class="fields-2"><label class="field">Start date & time<input name="start" type="datetime-local" required value="${esc(r.start)}"/></label><label class="field">End date & time<input name="end" type="datetime-local" required value="${esc(r.end)}"/></label></div><div class="divider"></div><h3>Optional equivalents</h3><p class="muted small">Value of ONE unit. Used for reports, not actual cash transactions.</p><div class="fields-2"><label class="field">₹ per unit<input name="moneyRate" type="number" min="0" step="any" value="${esc(r.moneyRate)}"/></label><label class="field">Minutes per unit<input name="timeRate" type="number" min="0" step="any" value="${esc(r.timeRate)}"/></label></div>${existing && logOf(existing.id).length ? '<p class="warning">Changing window rules or starting quantity will recalculate earlier balances. Export a backup first.</p>' : ""}<button type="submit" class="primary wide">${existing ? "Save changes" : "Create resource"}</button></form></div>`,
+    `<div class="section-head"><button class="text-btn" id="back">← Back</button></div><div class="panel"><h2>${existing ? "Edit resource" : "Create resource"}</h2><p class="muted small">One resource = one independently configured balance.</p><form id="resource-form"><label class="field">Resource name<input name="name" required maxlength="65" value="${esc(r.name)}" placeholder="e.g. Airtel Data"/></label><div class="fields-2"><label class="field">Symbol / Emoji<input name="emoji" maxlength="6" value="${esc(r.emoji)}" placeholder="📶"/></label><label class="field">Unit<input name="unit" required maxlength="18" value="${esc(r.unit)}" placeholder="GB, ₹, min"/></label></div><label class="field">Starting quantity<input name="initial" type="number" min="0" step="any" required value="${esc(r.initial)}"/></label><label class="field">Resource window<select name="frequency">${["hourly", "daily", "weekly", "monthly"].map((f) => `<option value="${f}" ${r.frequency === f ? "selected" : ""}>${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join("")}</select></label><div class="fields-2"><label class="field">Replenish each window<input name="refill" type="number" min="0" step="any" required value="${esc(r.refill)}"/></label><label class="field">Carry forward (%)<input name="carry" type="number" min="0" max="100" step="any" required value="${esc(r.carry)}"/></label></div><label class="field"><span>Consumption limit</span><select name="allowNegative"><option value="false" ${!r.allowNegative?"selected":""}>Strict — prevent negative balance</option><option value="true" ${r.allowNegative?"selected":""}>Flexible — allow negative balance</option></select></label><p class="muted small">Flexible resources can go below zero. Negative balances carry forward using the same percentage.</p><div class="fields-2"><label class="field">Start date & time<input name="start" type="datetime-local" required value="${esc(r.start)}"/></label><label class="field">End date & time<input name="end" type="datetime-local" required value="${esc(r.end)}"/></label></div><div class="divider"></div><h3>Optional equivalents</h3><p class="muted small">Value of ONE unit. Used for reports, not actual cash transactions.</p><div class="fields-2"><label class="field">₹ per unit<input name="moneyRate" type="number" min="0" step="any" value="${esc(r.moneyRate)}"/></label><label class="field">Minutes per unit<input name="timeRate" type="number" min="0" step="any" value="${esc(r.timeRate)}"/></label></div>${existing && logOf(existing.id).length ? '<p class="warning">Changing window rules or starting quantity will recalculate earlier balances. Export a backup first.</p>' : ""}<button type="submit" class="primary wide">${existing ? "Save changes" : "Create resource"}</button></form></div>`,
   );
   $("#back").onclick = () => go("all");
   $("#resource-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     const data = Object.fromEntries(f.entries());
+    data.allowNegative = data.allowNegative === "true";
     for (const k of ["initial", "refill", "carry", "moneyRate", "timeRate"])
       data[k] = Number(data[k] || 0);
     if (+new Date(data.end) <= +new Date(data.start))
@@ -337,8 +345,18 @@ function edit() {
 }
 function settings() {
   shell(
-    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1 · Offline-first · No account required.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
+    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Daily reminders 🔔</h2><p class="muted small">Two optional local notifications with a snapshot of active resource balances. Times use your phone clock.</p><label class="reminder-row"><span>Morning reminder</span><input type="checkbox" id="morning-on" ${state.reminders.morning?"checked":""}/></label><label class="field">Morning time<input type="time" id="morning-time" value="${esc(state.reminders.morningTime)}"/></label><label class="reminder-row"><span>Evening reminder</span><input type="checkbox" id="evening-on" ${state.reminders.evening?"checked":""}/></label><label class="field">Evening time<input type="time" id="evening-time" value="${esc(state.reminders.eveningTime)}"/></label><button class="secondary wide" id="save-reminders">Save reminder settings</button><button class="secondary wide" id="test-reminder">Send test notification</button><p class="muted small">${reminderSupported()?"Android local notifications available. Allow notifications when prompted.":"Reminder times can be saved here; scheduled notifications require the Android APK."} Notifications show the latest snapshot saved when the app was last opened or updated.</p></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1 · Offline-first · No account required.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
   );
+  $("#save-reminders").onclick = async () => {
+    state.reminders = { morning: $("#morning-on").checked, morningTime: $("#morning-time").value, evening: $("#evening-on").checked, eveningTime: $("#evening-time").value };
+    await setSetting("reminders", state.reminders);
+    try { await syncReminders(state.reminders, state.resources, state.logs, true); notify("Reminder settings saved."); }
+    catch(e) { notify("Settings saved, but notifications could not be scheduled: " + e.message, true); }
+  };
+  $("#test-reminder").onclick = async () => {
+    try { await showTestReminder(state.resources, state.logs); notify("Test notification requested."); }
+    catch(e) { notify(e.message, true); }
+  };
   $("#theme").value = state.theme;
   $("#theme").onchange = async (e) => {
     state.theme = e.target.value;
@@ -358,6 +376,7 @@ function settings() {
     try {
       const restored = await restoreBackup(e.target.files[0]);
       if (restored) {
+        state.reminders = await getSetting("reminders", state.reminders);
         await refresh();
         notify("Backup restored.");
       }
@@ -402,6 +421,7 @@ function render() {
 }
 async function init() {
   state.theme = await getSetting("theme", "system");
+  state.reminders = await getSetting("reminders", state.reminders);
   applyTheme();
   await refresh();
   state.expanded=state.resources.find(r=>!r.archived)?.id||null;
