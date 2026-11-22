@@ -1,6 +1,7 @@
 import "./style.css";
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
+import { backTarget } from "./navigation-logic.js";
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { syncReminders, reminderSupported, showTestReminder } from "./reminders.js";
 import {
@@ -19,6 +20,8 @@ import {
   localDay,
   status,
   round,
+  allowsDebt,
+  canConsumeResource,
 } from "./resource-engine.js";
 import { reportFor } from "./reports.js";
 import { exportBackup, restoreBackup, exportCSV } from "./backup.js";
@@ -53,7 +56,12 @@ const esc = (s) =>
 const fmt = (n, d = 2) =>
   Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: d });
 const money = (n) => "₹" + fmt(n);
-const unit = (n, r) => `${fmt(n)} ${esc(r.unit)}`;
+const unit = (n, r) => {
+  const numeric = Number(n) || 0;
+  const negative = numeric < 0 ? "−" : "";
+  if (["₹", "INR", "Rs", "Rs."].includes(String(r.unit).trim())) return `${negative}₹${fmt(Math.abs(numeric))}`;
+  return `${negative}${fmt(Math.abs(numeric))} ${esc(r.unit)}`;
+};
 const unique = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const dateLabel = (x) =>
   new Date(x).toLocaleString("en-IN", {
@@ -73,6 +81,9 @@ const notify = (message, error = false) => {
   setTimeout(() => e.classList.remove("show"), 3500);
 };
 const getR = (id) => state.resources.find((r) => r.id === id);
+const isFlexible = allowsDebt;
+const canConsume = canConsumeResource;
+let lastBackAt = 0;
 const logOf = (id) => state.logs.filter((x) => x.resourceId === id);
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
@@ -80,10 +91,13 @@ function applyTheme() {
 }
 async function updateStatusBar() {
   if (!Capacitor.isNativePlatform()) return;
-  const dark = state.theme === "dark" || (state.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  await StatusBar.show();
+  // On Android 15+ our native container receives WindowInsets. The top
+  // system-bar strip is light in both themes so Android icons must be dark.
+  // setOverlaysWebView(false) alone does not fix Android 15+ edge-to-edge.
   await StatusBar.setOverlaysWebView({ overlay: false });
-  await StatusBar.setBackgroundColor({ color: dark ? "#0e1624" : "#f6f8fc" });
-  await StatusBar.setStyle({ style: dark ? Style.Light : Style.Dark });
+  await StatusBar.setBackgroundColor({ color: "#f6f8fc" });
+  await StatusBar.setStyle({ style: Style.Dark });
 }
 function closeSheetImmediately() {
   const sheet = document.querySelector("#sheet-root");
@@ -91,17 +105,24 @@ function closeSheetImmediately() {
   sheet.replaceChildren();
   return true;
 }
+function navigateBack() {
+  // Filter duplicate Android back events within one gesture.
+  const now = Date.now();
+  if (now - lastBackAt < 220) return;
+  lastBackAt = now;
+  const action = backTarget(state.page, !!document.querySelector("#sheet-root .action-sheet"));
+  if (action === "dismiss-sheet") { closeSheetImmediately(); return; }
+  if (action === "all" || action === "home") { go(action); return; }
+  if (action === "exit" && Capacitor.isNativePlatform()) App.exitApp().catch(console.warn);
+}
 function setupAndroidBack() {
   if (!Capacitor.isNativePlatform()) return;
-  App.addListener("backButton", async () => {
-    if (closeSheetImmediately()) return;
-    if (state.page === "edit") { go("all"); return; }
-    if (state.page !== "home") { go("home"); return; }
-    await App.exitApp();
-  }).catch(console.warn);
+  // Listen ONLY to our native callback. Registering an extra Capacitor
+  // backButton handler can steal dispatcher priority on Android 15+.
+  window.addEventListener("resource-manager:native-back", navigateBack);
 }
 async function refresh() {
-  state.resources = await resources();
+  state.resources = (await resources()).map(r => ({...r, allowNegative: isFlexible(r)}));
   state.logs = await allLogs();
   render();
   syncReminders(state.reminders, state.resources, state.logs).catch(console.warn);
@@ -171,7 +192,7 @@ function card(r,now=new Date()) {
   const allocation=Math.max(0,(p?.opening??Number(r.initial))+(p?.added??0));
   const pct=allocation>0?Math.max(0,Math.min(100,Math.round(available/allocation*100))):0;
   const frequencyLabel = ({ hourly: "Hourly", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" })[r.frequency] || r.frequency || "—";
-  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now ${available<0?"negative-balance":""}">${unit(available,r)} <small>(${available<0?"Debt":pct+"%"})</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
+  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">${available < 0 ? "Debt" : "Available"}</small><span class="remaining-now ${available<0?"negative-balance":""}">${unit(available,r)}${available < 0 ? "" : ` <small>(${pct}%)</small>`}</span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
 }
 function home() {
   const now=new Date(),active=orderedResources(state.resources.filter(r=>!r.archived && status(r,now)==="Active"), "home");
@@ -181,22 +202,57 @@ function home() {
   document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>openSheet(b.dataset.open));
 }
 function openSheet(id) {
-  const r=getR(id);if(!r||status(r)!=="Active")return;
-  const s=evaluate(r,logOf(id));
-  const root=$("#sheet-root");
-  root.innerHTML=`<div class="sheet-backdrop" id="sheet-backdrop"></div><section class="action-sheet" role="dialog" aria-modal="true" aria-label="Update ${esc(r.name)}"><div class="sheet-handle"></div><div class="sheet-head"><strong>${esc(r.emoji||"◈")} ${esc(r.name)}</strong><button class="icon-button" id="close-sheet" aria-label="Close">✕</button></div><div class="sheet-tabs"><button class="selected" data-kind="consume">− Consume</button><button data-kind="add">＋ Add</button></div><form id="quick-log"><label class="field">Quantity (${esc(r.unit)})<input id="quick-amount" type="number" min="0.000001" step="any" inputmode="decimal" required placeholder="Enter amount"/></label><div class="sheet-preview"><span>Available now</span><strong>${unit(s.available,r)}</strong></div><div class="sheet-preview"><span>After update</span><strong id="preview-value">—</strong></div><button class="primary wide" type="submit">Confirm consumption</button></form></section>`;
-  let kind="consume";
-  const close=()=>{root.querySelector(".action-sheet")?.classList.add("closing");root.querySelector(".sheet-backdrop")?.classList.add("closing");setTimeout(()=>root.replaceChildren(),230)};
-  $("#sheet-backdrop").onclick=close;$("#close-sheet").onclick=close;
-  const update=()=>{const amount=Number($("#quick-amount").value);$("#preview-value").textContent=$("#quick-amount").value&&amount>0?unit(s.available+(kind==="add"?amount:-amount),r):"—";};
-  $("#quick-amount").oninput=update;
-  root.querySelectorAll("[data-kind]").forEach(b=>b.onclick=()=>{kind=b.dataset.kind;root.querySelectorAll("[data-kind]").forEach(x=>x.classList.toggle("selected",x===b));root.querySelector("button[type=submit]").textContent=kind==="consume"?"Confirm consumption":"Confirm addition";update()});
-  $("#quick-log").onsubmit=async e=>{e.preventDefault();const amount=Number($("#quick-amount").value);if(!Number.isFinite(amount)||amount<=0)return notify("Enter a positive quantity.",true);const current=evaluate(r,logOf(id)).available;if(kind==="consume"&&r.allowNegative!==true&&amount>current+1e-6)return notify("Quantity exceeds available balance.",true);await saveLog({id:unique(),resourceId:id,kind,amount:round(amount),timestamp:new Date().toISOString()});root.replaceChildren();await refresh();notify("Resource updated.")};
+  const r = getR(id);
+  if (!r || status(r) !== "Active") return;
+  const root = $("#sheet-root");
+  const s = evaluate(r, logOf(id));
+  const flexible = isFlexible(r);
+  root.innerHTML = `<div class="sheet-backdrop" id="sheet-backdrop"></div><section class="action-sheet" role="dialog" aria-modal="true" aria-label="Update ${esc(r.name)}"><div class="sheet-handle"></div><div class="sheet-head"><strong>${esc(r.emoji||"◈")} ${esc(r.name)}</strong><button class="icon-button" id="close-sheet" aria-label="Close">✕</button></div><div class="sheet-tabs"><button class="selected" data-kind="consume">− Consume</button><button data-kind="add">＋ Add</button></div><form id="quick-log"><p class="limit-note ${flexible ? "limit-flexible" : "limit-strict"}">${flexible ? "Flexible · Spending beyond the balance is allowed. Debt carries forward." : "Strict · Consumption cannot exceed the available balance."}</p><label class="field">Quantity (${esc(r.unit)})<input id="quick-amount" type="number" min="0.000001" step="any" inputmode="decimal" required placeholder="Enter amount"/></label><div class="sheet-preview"><span>Available now</span><strong class="${s.available < 0 ? "negative-balance" : ""}">${unit(s.available,r)}</strong></div><div class="sheet-preview"><span>After update</span><strong id="preview-value">—</strong></div><p id="limit-feedback" class="limit-feedback" role="status"></p><button class="primary wide" type="submit" id="confirm-log">Confirm consumption</button></form></section>`;
+  let kind = "consume";
+  const close = () => { root.replaceChildren(); };
+  $("#sheet-backdrop").onclick = close;
+  $("#close-sheet").onclick = close;
+  const update = () => {
+    const raw = $("#quick-amount").value;
+    const amount = Number(raw);
+    const valid = raw !== "" && Number.isFinite(amount) && amount > 0;
+    const balanceAfter = s.available + (kind === "add" ? amount : -amount);
+    const preview = $("#preview-value");
+    preview.textContent = valid ? unit(balanceAfter,r) + (balanceAfter < 0 ? " · Debt" : "") : "—";
+    preview.classList.toggle("negative-balance", valid && balanceAfter < 0);
+    const blocked = valid && kind === "consume" && !canConsume(r, amount, s.available);
+    $("#limit-feedback").textContent = blocked ? `Exceeds strict limit by ${unit(amount-Math.max(0,s.available),r)}. Change resource to Flexible to allow it.` : "";
+    $("#confirm-log").disabled = blocked;
+  };
+  $("#quick-amount").oninput = update;
+  root.querySelectorAll("[data-kind]").forEach(b => b.onclick = () => {
+    kind = b.dataset.kind;
+    root.querySelectorAll("[data-kind]").forEach(x => x.classList.toggle("selected", x === b));
+    $("#confirm-log").textContent = kind === "consume" ? "Confirm consumption" : "Confirm addition";
+    update();
+  });
+  $("#quick-log").onsubmit = async e => {
+    e.preventDefault();
+    const amount = Number($("#quick-amount").value);
+    if (!Number.isFinite(amount) || amount <= 0) return notify("Enter a positive quantity.",true);
+    const current = evaluate(r, logOf(id)).available;
+    if (kind === "consume" && !canConsume(r,amount,current)) {
+      update();
+      return notify("Strict limit is enabled. Edit this resource and choose Flexible to allow debt.",true);
+    }
+    try {
+      await saveLog({ id:unique(), resourceId:id, kind, amount:round(amount), timestamp:new Date().toISOString() });
+      root.replaceChildren();
+      await refresh();
+      const after = evaluate(r,logOf(id)).available;
+      notify(after < 0 ? `Saved · Debt: ${unit(Math.abs(after),r)}` : `Saved · Available: ${unit(after,r)}`);
+    } catch (error) { notify("Could not save transaction: " + error.message,true); }
+  };
   $("#quick-amount").focus();
 }
 function all() {
   const list=orderedResources(state.resources.filter(r=>state.showHidden||!r.archived), "all");
-  shell(`${listControls("all")}<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${r.allowNegative===true?"Flexible":"Strict"} · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
+  shell(`${listControls("all")}<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${isFlexible(r)?"Flexible":"Strict"} · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
   wireListControls();
   $("#show-all").onchange=e=>{state.showHidden=e.target.checked;render()};
   document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>go("edit",b.dataset.edit));
@@ -255,7 +311,7 @@ function analyticsStats(r, range) {
     const base = periods.reduce((sum, p) => sum + Math.max(0, p.opening + p.added), 0);
     return { date: key, used, pct: base > 0 ? 100 * used / base : 0 };
   });
-  return { consumed, expired, unresolved, total, consumedPct, expiredPct, trend };
+  return { consumed, expired, unresolved, total, consumedPct, expiredPct, trend, debt: range.toKey === localDay(new Date()) ? Math.max(0, -result.available) : 0 };
 }
 function analytics() {
   const range = analyticsRange();
@@ -266,7 +322,10 @@ function analytics() {
   const list = range ? resourcesList.map(r => {
     const stats = analyticsStats(r, range);
     const open = state.expanded === r.id;
-    return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}"><svg class="analytics-chart-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg></button></div><div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${Math.min(100,stats.consumedPct)}%"></span><span class="analytics-bar-expired" style="width:${Math.min(100,stats.expiredPct)}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-stats.consumedPct-stats.expiredPct)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
+    const barBase = Math.max(100, stats.consumedPct + stats.expiredPct);
+    const consumptionWidth = 100 * stats.consumedPct / barBase;
+    const expiryWidth = 100 * stats.expiredPct / barBase;
+    return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}"><svg class="analytics-chart-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg></button></div>${stats.debt > 0 ? `<div class="analytics-debt">Debt: ${unit(stats.debt,r)}</div>` : ""}<div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${consumptionWidth}%"></span><span class="analytics-bar-expired" style="width:${expiryWidth}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-consumptionWidth-expiryWidth)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
   }).join('') : '<div class="empty">Choose a valid date range and tap Apply.</div>';
   shell(`${selector}${custom}${listControls("analytics")}<div class="analytics-legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot red"></i>Expired</span></div><div class="compact-stack">${list || '<div class="empty">No resources yet.</div>'}</div>`);
   wireListControls();
@@ -293,7 +352,7 @@ function analytics() {
   });
 }
 function analyticsDetail(r, stats, range) {
-  const { total, consumed, expired, unresolved, trend } = stats;
+  const { total, consumed, expired, unresolved, trend, debt } = stats;
   const days = trend.length;
   const W = 340, left = 38, right = 330, top = 12, bottom = 130;
   const maxY = Math.max(100, Math.ceil(Math.max(...trend.map(d => d.pct), 100) / 25) * 25);
@@ -312,7 +371,7 @@ function analyticsDetail(r, stats, range) {
     return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".12" stroke-dasharray="3 4"/><text x="30" y="${y + 3}" text-anchor="end" font-size="10" fill="currentColor" opacity=".55">${v}%</text>`;
   }).join('');
   const dots = days <= 7 ? points.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="#E9B949"/>`).join('') : '';
-  return `<div class="analytics-detail"><div class="kpi-row"><div><small>Total</small><strong>${unit(total,r)}</strong></div><div><small>Consumed</small><strong class="yellow-text">${unit(consumed,r)}</strong></div><div><small>Expired</small><strong class="red-text">${unit(expired,r)}</strong></div></div>${unresolved > 0 ? `<p class="muted small unresolved-note">${unit(unresolved,r)} currently available (not expired)</p>` : ''}<div class="chart-heading">Daily consumption trend</div><div class="chart-scroll"><svg class="trend-chart" viewBox="0 0 ${W} 165" role="img" aria-label="Daily consumption percentages over selected date range">${grid}<path d="${path}" stroke="#E9B949" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>${dots}${labels}</svg></div><p class="muted small">Daily percentages use each day's resource-window allocation.</p></div>`;
+  return `<div class="analytics-detail"><div class="kpi-row"><div><small>Total</small><strong>${unit(total,r)}</strong></div><div><small>Consumed</small><strong class="yellow-text">${unit(consumed,r)}</strong></div><div><small>Expired</small><strong class="red-text">${unit(expired,r)}</strong></div></div>${unresolved > 0 ? `<p class="muted small unresolved-note">${unit(unresolved,r)} currently available (not expired)</p>` : ''}${debt > 0 ? `<p class="negative-balance small unresolved-note">Debt carried by this resource: ${unit(debt,r)}</p>` : ''}<div class="chart-heading">Daily consumption trend</div><div class="chart-scroll"><svg class="trend-chart" viewBox="0 0 ${W} 165" role="img" aria-label="Daily consumption percentages over selected date range">${grid}<path d="${path}" stroke="#E9B949" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>${dots}${labels}</svg></div><p class="muted small">Daily percentages use each day's resource-window allocation.</p></div>`;
 }
 function edit() {
   const existing = state.id ? getR(state.id) : null;
@@ -335,7 +394,7 @@ function edit() {
     timeRate: 0,
   };
   shell(
-    `<div class="section-head"><button class="text-btn" id="back">← Back</button></div><div class="panel"><h2>${existing ? "Edit resource" : "Create resource"}</h2><p class="muted small">One resource = one independently configured balance.</p><form id="resource-form"><label class="field">Resource name<input name="name" required maxlength="65" value="${esc(r.name)}" placeholder="e.g. Airtel Data"/></label><div class="fields-2"><label class="field">Symbol / Emoji<input name="emoji" maxlength="6" value="${esc(r.emoji)}" placeholder="📶"/></label><label class="field">Unit<input name="unit" required maxlength="18" value="${esc(r.unit)}" placeholder="GB, ₹, min"/></label></div><label class="field">Starting quantity<input name="initial" type="number" min="0" step="any" required value="${esc(r.initial)}"/></label><label class="field">Resource window<select name="frequency">${["hourly", "daily", "weekly", "monthly"].map((f) => `<option value="${f}" ${r.frequency === f ? "selected" : ""}>${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join("")}</select></label><div class="fields-2"><label class="field">Replenish each window<input name="refill" type="number" min="0" step="any" required value="${esc(r.refill)}"/></label><label class="field">Carry forward (%)<input name="carry" type="number" min="0" max="100" step="any" required value="${esc(r.carry)}"/></label></div><label class="field"><span>Consumption limit</span><select name="allowNegative"><option value="false" ${!r.allowNegative?"selected":""}>Strict — prevent negative balance</option><option value="true" ${r.allowNegative?"selected":""}>Flexible — allow negative balance</option></select></label><p class="muted small">Flexible resources can go below zero. Negative balances carry forward using the same percentage.</p><div class="fields-2"><label class="field">Start date & time<input name="start" type="datetime-local" required value="${esc(r.start)}"/></label><label class="field">End date & time<input name="end" type="datetime-local" required value="${esc(r.end)}"/></label></div><div class="divider"></div><h3>Optional equivalents</h3><p class="muted small">Value of ONE unit. Used for reports, not actual cash transactions.</p><div class="fields-2"><label class="field">₹ per unit<input name="moneyRate" type="number" min="0" step="any" value="${esc(r.moneyRate)}"/></label><label class="field">Minutes per unit<input name="timeRate" type="number" min="0" step="any" value="${esc(r.timeRate)}"/></label></div>${existing && logOf(existing.id).length ? '<p class="warning">Changing window rules or starting quantity will recalculate earlier balances. Export a backup first.</p>' : ""}<button type="submit" class="primary wide">${existing ? "Save changes" : "Create resource"}</button></form></div>`,
+    `<div class="section-head"><button class="text-btn" id="back">← Back</button></div><div class="panel"><h2>${existing ? "Edit resource" : "Create resource"}</h2><p class="muted small">One resource = one independently configured balance.</p><form id="resource-form"><label class="field">Resource name<input name="name" required maxlength="65" value="${esc(r.name)}" placeholder="e.g. Airtel Data"/></label><div class="fields-2"><label class="field">Symbol / Emoji<input name="emoji" maxlength="6" value="${esc(r.emoji)}" placeholder="📶"/></label><label class="field">Unit<input name="unit" required maxlength="18" value="${esc(r.unit)}" placeholder="GB, ₹, min"/></label></div><label class="field">Starting quantity<input name="initial" type="number" min="0" step="any" required value="${esc(r.initial)}"/></label><label class="field">Resource window<select name="frequency">${["hourly", "daily", "weekly", "monthly"].map((f) => `<option value="${f}" ${r.frequency === f ? "selected" : ""}>${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join("")}</select></label><div class="fields-2"><label class="field">Replenish each window<input name="refill" type="number" min="0" step="any" required value="${esc(r.refill)}"/></label><label class="field">Carry forward (%)<input name="carry" type="number" min="0" max="100" step="any" required value="${esc(r.carry)}"/></label></div><label class="field"><span>Consumption limit</span><select name="allowNegative"><option value="false" ${!isFlexible(r)?"selected":""}>Strict — prevent negative balance</option><option value="true" ${isFlexible(r)?"selected":""}>Flexible — allow negative balance</option></select></label><p class="muted small">For example, 10,000 minus 12,000 = −2,000. With 100% carry-forward, next +10,000 becomes 8,000.</p><div class="fields-2"><label class="field">Start date & time<input name="start" type="datetime-local" required value="${esc(r.start)}"/></label><label class="field">End date & time<input name="end" type="datetime-local" required value="${esc(r.end)}"/></label></div><div class="divider"></div><h3>Optional equivalents</h3><p class="muted small">Value of ONE unit. Used for reports, not actual cash transactions.</p><div class="fields-2"><label class="field">₹ per unit<input name="moneyRate" type="number" min="0" step="any" value="${esc(r.moneyRate)}"/></label><label class="field">Minutes per unit<input name="timeRate" type="number" min="0" step="any" value="${esc(r.timeRate)}"/></label></div>${existing && logOf(existing.id).length ? '<p class="warning">Changing window rules or starting quantity will recalculate earlier balances. Export a backup first.</p>' : ""}<button type="submit" class="primary wide">${existing ? "Save changes" : "Create resource"}</button></form></div>`,
   );
   $("#back").onclick = () => go("all");
   $("#resource-form").onsubmit = async (e) => {
@@ -371,7 +430,7 @@ function edit() {
 }
 function settings() {
   shell(
-    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Daily reminders 🔔</h2><p class="muted small">Two optional local notifications with a snapshot of active resource balances. Times use your phone clock.</p><label class="reminder-row"><span>Morning reminder</span><input type="checkbox" id="morning-on" ${state.reminders.morning?"checked":""}/></label><label class="field">Morning time<input type="time" id="morning-time" value="${esc(state.reminders.morningTime)}"/></label><label class="reminder-row"><span>Evening reminder</span><input type="checkbox" id="evening-on" ${state.reminders.evening?"checked":""}/></label><label class="field">Evening time<input type="time" id="evening-time" value="${esc(state.reminders.eveningTime)}"/></label><button class="secondary wide" id="save-reminders">Save reminder settings</button><button class="secondary wide" id="test-reminder">Send test notification</button><p class="muted small">${reminderSupported()?"Android local notifications available. Allow notifications when prompted.":"Reminder times can be saved here; scheduled notifications require the Android APK."} Notifications show the latest snapshot saved when the app was last opened or updated.</p></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1 · Offline-first · No account required.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
+    `<div class="panel"><h2>Appearance</h2><label class="field">Theme<select id="theme"><option value="system">System default</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div><div class="panel"><h2>Daily reminders 🔔</h2><p class="muted small">Two optional local notifications with a snapshot of active resource balances. Times use your phone clock.</p><label class="reminder-row"><span>Morning reminder</span><input type="checkbox" id="morning-on" ${state.reminders.morning?"checked":""}/></label><label class="field">Morning time<input type="time" id="morning-time" value="${esc(state.reminders.morningTime)}"/></label><label class="reminder-row"><span>Evening reminder</span><input type="checkbox" id="evening-on" ${state.reminders.evening?"checked":""}/></label><label class="field">Evening time<input type="time" id="evening-time" value="${esc(state.reminders.eveningTime)}"/></label><button class="secondary wide" id="save-reminders">Save reminder settings</button><button class="secondary wide" id="test-reminder">Send test notification</button><p class="muted small">${reminderSupported()?"Android local notifications available. Allow notifications when prompted.":"Reminder times can be saved here; scheduled notifications require the Android APK."} Notifications show the latest snapshot saved when the app was last opened or updated.</p></div><div class="panel"><h2>Backup & restore</h2><p class="muted small">Your data stays on this device until you choose to export it. Save backup JSON in Downloads or Drive using your phone's available save/share options.</p><button id="backup" class="secondary wide">↓ Backup JSON file</button><button id="restore" class="secondary wide">↑ Restore JSON file</button><input id="restore-file" type="file" accept="application/json,.json" hidden/><button id="csv" class="secondary wide">↓ Export transactions CSV</button></div><div class="panel"><h2>About</h2><p class="muted">Resource Manager v1.1 · Android Safe Bar + Back Fix · Offline-first.</p><p class="muted small">Back up before clearing browser data or moving from PWA to APK. Their storage is separate.</p></div>`,
   );
   $("#save-reminders").onclick = async () => {
     state.reminders = { morning: $("#morning-on").checked, morningTime: $("#morning-time").value, evening: $("#evening-on").checked, eveningTime: $("#evening-time").value };

@@ -822,3 +822,16 @@ h3 {
 
 /* Distinguish a negative available balance from positive remaining amounts. */
 .negative-balance { color: var(--danger) !important; }
+
+/* 2026-11: explicit overspending feedback and native-safe app chrome */
+.limit-note { font-size: 11px; margin: 0 0 12px; line-height: 1.5; }
+.limit-flexible { color: var(--accent); }
+.limit-strict { color: var(--muted); }
+.limit-feedback { color: var(--danger); min-height: 0; font-size: 11px; line-height: 1.4; margin: 7px 0 0; }
+.analytics-debt { color: var(--danger); font-size: 11px; text-align: right; font-weight: 650; margin: 0 9px 4px; }
+.remaining-now.negative-balance { white-space: normal; overflow-wrap: anywhere; }
+:root { --app-top-safe-area: env(safe-area-inset-top, 0px); }
+/* Browser/PWA uses CSS safe area. APK on Android 15+ receives native WindowInsets. */
+@supports (padding: max(0px)) {
+  .topbar { padding-top: max(12px, calc(12px + var(--app-top-safe-area))); }
+}

@@ -80,8 +80,8 @@ export function evaluate(r, logs = [], until = new Date()) {
       gained = 0;
     while (
       index < sorted.length &&
-      +toDate(sorted[index].timestamp) <
-        +periodEnd + (+periodEnd === +cutoff ? 1 : 0)
+      (+toDate(sorted[index].timestamp) < +periodEnd ||
+       (!rolled && +periodEnd === +cutoff && +toDate(sorted[index].timestamp) === +periodEnd))
     ) {
       const item = sorted[index++];
       if (item.kind === "add") {
@@ -98,7 +98,7 @@ export function evaluate(r, logs = [], until = new Date()) {
     let lost = 0,
       carried = balance;
     if (rolled || ended) {
-      carried = ended ? 0 : round(balance * carry);
+      carried = ended ? Math.min(0, balance) : round(balance * carry);
       lost = round(Math.max(0, balance) * (1 - carry));
       expired = round(expired + lost);
       balance = carried;
@@ -113,11 +113,15 @@ export function evaluate(r, logs = [], until = new Date()) {
       carried: round(carried),
       closed: rolled || ended,
     });
-    if (ended || +periodEnd === +cutoff) break;
+    if (ended) break;
     if (rolled) {
+      // Replenishment happens *at* the new boundary, including exactly
+      // 00:00:00. This is equally valid when carried is a negative debt.
       balance = round(balance + refill);
       cursor = new Date(boundary);
-    } else break;
+      continue;
+    }
+    break;
   }
   const today = localDay(until);
   const todayUsed = sorted
@@ -133,6 +137,11 @@ export function evaluate(r, logs = [], until = new Date()) {
     periods,
     todayUsed: round(todayUsed),
   };
+}
+// Imported backups may store this as a string; normalise old records.
+export const allowsDebt = r => r?.allowNegative === true || r?.allowNegative === "true";
+export function canConsumeResource(r, amount, available) {
+  return allowsDebt(r) || amount <= Math.max(0, available) + 1e-6;
 }
 export function groupDays(logs) {
   const days = new Map();
