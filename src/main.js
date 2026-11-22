@@ -95,7 +95,8 @@ function card(r,now=new Date()) {
   // Opening allocation plus manual additions during this window.
   const allocation=Math.max(0,(p?.opening??Number(r.initial))+(p?.added??0));
   const pct=allocation>0?Math.max(0,Math.min(100,Math.round(available/allocation*100))):0;
-  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><strong class="compact-name">${esc(r.name)}</strong><span class="used-now">↗ ${unit(s.todayUsed,r)}</span><span class="remaining-now">${unit(available,r)} <small>(${pct}%)</small></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
+  const frequencyLabel = ({ hourly: "Hourly", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" })[r.frequency] || r.frequency || "—";
+  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now">${unit(available,r)} <small>(${pct}%)</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
 }
 function home() {
   const now=new Date(),active=state.resources.filter(r=>!r.archived && status(r,now)==="Active");
