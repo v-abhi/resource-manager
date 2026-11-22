@@ -1,2 +1,3 @@
-# resource-manager
-Description: A lightweight personal resource management app to track availability, consumption, replenishment, expiration, and value.
+# Resource Manager
+
+Project structure only. Application code will be added file by file.
