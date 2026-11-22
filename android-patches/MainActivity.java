@@ -7,45 +7,89 @@ import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+  private static final int BAR_COLOR = Color.rgb(246, 248, 252);
+  private boolean backRegistered = false;
+
+  private void sendBackToWeb() {
+    if (getBridge() == null || getBridge().getWebView() == null) return;
+    getBridge().getWebView().post(() -> getBridge().getWebView().evaluateJavascript(
+        "window.__resourceManagerBack && window.__resourceManagerBack()", null));
+  }
+
+  private void makeSystemIconsVisible() {
+    getWindow().setStatusBarColor(BAR_COLOR);
+    getWindow().setNavigationBarColor(BAR_COLOR);
+    // White icons on our almost-white background caused the invisible clock/network issue.
+    // LIGHT_STATUS_BAR means DARK foreground icons in Android terminology.
+    View decor = getWindow().getDecorView();
+    if (Build.VERSION.SDK_INT >= 30) {
+      WindowInsetsController controller = decor.getWindowInsetsController();
+      if (controller != null) {
+        controller.setSystemBarsAppearance(
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS |
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS |
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+      }
+    } else {
+      decor.setSystemUiVisibility(decor.getSystemUiVisibility() |
+          View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR |
+          View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    }
+  }
+
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    makeSystemIconsVisible();
 
-    // The modern Android back gesture must reach our SPA router rather
-    // than causing WebView to navigate or immediately exiting the Activity.
-    getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-      @Override
-      public void handleOnBackPressed() {
-        if (getBridge() == null || getBridge().getWebView() == null) return;
-        getBridge().getWebView().post(() ->
-          getBridge().getWebView().evaluateJavascript(
-            "window.dispatchEvent(new Event('resource-manager:native-back'))", null));
-      }
-    });
+    // Android 13+ gesture navigation: register with higher priority than the
+    // WebView default handler, so navigating between tabs is not swallowed.
+    if (Build.VERSION.SDK_INT >= 33) {
+      getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+          OnBackInvokedDispatcher.PRIORITY_OVERLAY, new OnBackInvokedCallback() {
+            @Override public void onBackInvoked() { sendBackToWeb(); }
+          });
+      backRegistered = true;
+    }
+    if (!backRegistered) {
+      getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+        @Override public void handleOnBackPressed() { sendBackToWeb(); }
+      });
+    }
 
-    // API 35+ forces edge-to-edge. StatusBar.setOverlaysWebView(false)
-    // alone no longer prevents the web content from drawing beneath icons.
-    // Apply the real system bar insets to the native WebView container.
-    if (Build.VERSION.SDK_INT >= 35) {
-      final View webView = getBridge().getWebView();
-      final ViewGroup parent = (ViewGroup) webView.getParent();
-      parent.setBackgroundColor(Color.rgb(246, 248, 252));
-      getWindow().getDecorView().setBackgroundColor(Color.rgb(246, 248, 252));
-      parent.setOnApplyWindowInsetsListener((view, windowInsets) -> {
+    // Android 15+ enforces edge-to-edge. Reserve actual system-bar space;
+    // web content must not paint or receive touches behind notification icons.
+    if (Build.VERSION.SDK_INT >= 35 && getBridge() != null && getBridge().getWebView() != null) {
+      View webView = getBridge().getWebView();
+      ViewGroup container = (ViewGroup) webView.getParent();
+      container.setBackgroundColor(BAR_COLOR);
+      container.setOnApplyWindowInsetsListener((view, windowInsets) -> {
         Insets insets = windowInsets.getInsets(
-          WindowInsets.Type.statusBars() |
-          WindowInsets.Type.navigationBars() |
-          WindowInsets.Type.displayCutout());
+            WindowInsets.Type.statusBars() |
+            WindowInsets.Type.navigationBars() |
+            WindowInsets.Type.displayCutout());
         view.setPadding(insets.left, insets.top, insets.right, insets.bottom);
-        // The WebView is physically within the safe area, so do not
-        // pass insets down and apply them a second time in CSS.
         return WindowInsets.CONSUMED;
       });
-      parent.requestApplyInsets();
+      container.requestApplyInsets();
     }
+  }
+
+  @Override public void onResume() {
+    super.onResume();
+    makeSystemIconsVisible();
+  }
+
+  @Override public void onWindowFocusChanged(boolean hasFocus) {
+    super.onWindowFocusChanged(hasFocus);
+    if (hasFocus) makeSystemIconsVisible();
   }
 }
