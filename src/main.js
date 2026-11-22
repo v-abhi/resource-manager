@@ -1,4 +1,7 @@
 import "./style.css";
+import { Capacitor } from "@capacitor/core";
+import { App } from "@capacitor/app";
+import { StatusBar, Style } from "@capacitor/status-bar";
 import { syncReminders, reminderSupported, showTestReminder } from "./reminders.js";
 import {
   resources,
@@ -73,6 +76,29 @@ const getR = (id) => state.resources.find((r) => r.id === id);
 const logOf = (id) => state.logs.filter((x) => x.resourceId === id);
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
+  updateStatusBar().catch(console.warn);
+}
+async function updateStatusBar() {
+  if (!Capacitor.isNativePlatform()) return;
+  const dark = state.theme === "dark" || (state.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  await StatusBar.setOverlaysWebView({ overlay: false });
+  await StatusBar.setBackgroundColor({ color: dark ? "#0e1624" : "#f6f8fc" });
+  await StatusBar.setStyle({ style: dark ? Style.Light : Style.Dark });
+}
+function closeSheetImmediately() {
+  const sheet = document.querySelector("#sheet-root");
+  if (!sheet?.querySelector(".action-sheet")) return false;
+  sheet.replaceChildren();
+  return true;
+}
+function setupAndroidBack() {
+  if (!Capacitor.isNativePlatform()) return;
+  App.addListener("backButton", async () => {
+    if (closeSheetImmediately()) return;
+    if (state.page === "edit") { go("all"); return; }
+    if (state.page !== "home") { go("home"); return; }
+    await App.exitApp();
+  }).catch(console.warn);
 }
 async function refresh() {
   state.resources = await resources();
@@ -145,7 +171,7 @@ function card(r,now=new Date()) {
   const allocation=Math.max(0,(p?.opening??Number(r.initial))+(p?.added??0));
   const pct=allocation>0?Math.max(0,Math.min(100,Math.round(available/allocation*100))):0;
   const frequencyLabel = ({ hourly: "Hourly", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" })[r.frequency] || r.frequency || "—";
-  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now ${available<0?"negative-balance":""}">${unit(available,r)} <small>(${available<0?"Over budget":pct+"%"})</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
+  return `<button class="resource-card compact-card" data-open="${esc(r.id)}" ${st!=="Active"?"disabled":""}><div class="compact-card-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><span class="compact-resource-info"><strong class="compact-name">${esc(r.name)}</strong><small class="compact-frequency">${esc(frequencyLabel)}</small></span><span class="compact-metric used-metric"><small class="compact-metric-label">Today</small><span class="used-now">↗ ${unit(s.todayUsed,r)}</span></span><span class="compact-metric remaining-metric"><small class="compact-metric-label">Available</small><span class="remaining-now ${available<0?"negative-balance":""}">${unit(available,r)} <small>(${available<0?"Debt":pct+"%"})</small></span></span></div><div class="split-bar"><span class="bar-used" style="width:${100-pct}%"></span><span class="bar-left" style="width:${pct}%"></span></div></button>`;
 }
 function home() {
   const now=new Date(),active=orderedResources(state.resources.filter(r=>!r.archived && status(r,now)==="Active"), "home");
@@ -165,12 +191,12 @@ function openSheet(id) {
   const update=()=>{const amount=Number($("#quick-amount").value);$("#preview-value").textContent=$("#quick-amount").value&&amount>0?unit(s.available+(kind==="add"?amount:-amount),r):"—";};
   $("#quick-amount").oninput=update;
   root.querySelectorAll("[data-kind]").forEach(b=>b.onclick=()=>{kind=b.dataset.kind;root.querySelectorAll("[data-kind]").forEach(x=>x.classList.toggle("selected",x===b));root.querySelector("button[type=submit]").textContent=kind==="consume"?"Confirm consumption":"Confirm addition";update()});
-  $("#quick-log").onsubmit=async e=>{e.preventDefault();const amount=Number($("#quick-amount").value);if(!Number.isFinite(amount)||amount<=0)return notify("Enter a positive quantity.",true);const current=evaluate(r,logOf(id)).available;if(kind==="consume"&&!r.allowNegative&&amount>current+1e-6)return notify("Quantity exceeds available balance.",true);await saveLog({id:unique(),resourceId:id,kind,amount:round(amount),timestamp:new Date().toISOString()});root.replaceChildren();await refresh();notify("Resource updated.")};
+  $("#quick-log").onsubmit=async e=>{e.preventDefault();const amount=Number($("#quick-amount").value);if(!Number.isFinite(amount)||amount<=0)return notify("Enter a positive quantity.",true);const current=evaluate(r,logOf(id)).available;if(kind==="consume"&&r.allowNegative!==true&&amount>current+1e-6)return notify("Quantity exceeds available balance.",true);await saveLog({id:unique(),resourceId:id,kind,amount:round(amount),timestamp:new Date().toISOString()});root.replaceChildren();await refresh();notify("Resource updated.")};
   $("#quick-amount").focus();
 }
 function all() {
   const list=orderedResources(state.resources.filter(r=>state.showHidden||!r.archived), "all");
-  shell(`${listControls("all")}<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
+  shell(`${listControls("all")}<label class="inline-check compact-check"><input type="checkbox" id="show-all" ${state.showHidden?"checked":""}/> Show archived resources</label><div class="compact-stack">${list.map(r=>`<div class="manage-row"><span class="emoji compact-emoji">${esc(r.emoji||"◈")}</span><div class="manage-info"><strong>${esc(r.name)}${r.archived?' <small class="muted">(Archived)</small>':''}</strong><span class="muted small">${unit(r.refill,r)}/${esc(r.frequency)} · ↪ ${fmt(r.carry)}% · ${r.allowNegative===true?"Flexible":"Strict"} · ${status(r)}</span></div><button class="icon-button" data-edit="${esc(r.id)}" aria-label="Edit ${esc(r.name)}">✎</button><button class="icon-button" data-menu="${esc(r.id)}" aria-label="More options for ${esc(r.name)}">⋮</button></div>`).join("")||'<div class="empty">No resources to show.</div>'}</div>`);
   wireListControls();
   $("#show-all").onchange=e=>{state.showHidden=e.target.checked;render()};
   document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>go("edit",b.dataset.edit));
@@ -423,6 +449,8 @@ async function init() {
   state.theme = await getSetting("theme", "system");
   state.reminders = await getSetting("reminders", state.reminders);
   applyTheme();
+  setupAndroidBack();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => updateStatusBar().catch(console.warn));
   await refresh();
   state.expanded=state.resources.find(r=>!r.archived)?.id||null;
   render();
