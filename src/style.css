@@ -655,3 +655,33 @@ h3 {
     margin: 4px 0;
   }
 }
+
+/* Compact four-page design */
+.compact-top{padding-top:20px;padding-bottom:12px;align-items:center}
+.compact-top h1{font-size:23px;line-height:1.2;margin:0 0 4px}
+.compact-content{padding-top:6px}
+.compact-stack{display:grid;gap:9px}
+.compact-card{display:block;width:100%;padding:13px 12px;text-align:left;min-height:66px}
+.compact-card-row{display:flex;align-items:center;gap:7px;white-space:nowrap;min-width:0}
+.compact-emoji{font-size:18px;flex:0 0 auto;width:24px;text-align:center}
+.compact-name{font-size:13px;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.used-now{font-size:12px;color:#E9B949;flex-shrink:0}
+.remaining-now{font-size:12px;color:#25B88A;font-weight:700;flex-shrink:0}
+.remaining-now small{font-size:10px;font-weight:500}
+.split-bar{height:7px;display:flex;overflow:hidden;border-radius:50px;background:var(--line);margin-top:10px}
+.bar-used{background:#E9B949}.bar-left{background:#25B88A}.bar-expired{background:#E47A7A}.bar-unresolved{background:var(--line)}
+.legend{display:flex;gap:16px;justify-content:flex-end;margin:12px 3px;color:var(--muted);font-size:11px}
+.legend span{display:flex;align-items:center;gap:5px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%}.dot.yellow{background:#E9B949}.dot.green{background:#25B88A}
+.manage-row{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 10px;min-height:63px}
+.manage-info{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}.manage-info strong{font-size:13px}.manage-info .small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.icon-button{border:0;background:transparent;color:var(--muted);font-size:22px;min-width:29px;min-height:34px}
+.compact-check{margin:0 0 13px;font-size:12px}
+.period-tabs,.sheet-tabs{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:4px;gap:4px;margin-bottom:12px}
+.period-tabs button,.sheet-tabs button{flex:1;background:transparent;border:0;border-radius:8px;padding:9px;color:var(--muted);font-weight:600}
+.period-tabs button.selected,.sheet-tabs button.selected{background:var(--soft);color:var(--accent)}
+.analytics-item{border:1px solid var(--line);border-radius:13px;background:var(--panel);overflow:hidden}
+.accordion-head{width:100%;display:flex;justify-content:space-between;align-items:center;border:0;background:transparent;color:var(--text);padding:14px;font-size:14px;font-weight:600;text-align:left}
+.analytics-detail{padding:0 13px 14px}.kpi-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:7px 0 4px}.kpi-row>div{display:flex;flex-direction:column;gap:5px;min-width:0}.kpi-row>div:nth-child(2){text-align:center}.kpi-row>div:nth-child(3){text-align:right}.kpi-row small{font-size:10px;color:var(--muted)}.kpi-row strong{font-size:12px;overflow-wrap:anywhere}
+.yellow-text{color:#E9B949!important}.red-text{color:#E47A7A!important}.bar-labels{display:flex;justify-content:space-between;font-size:11px;margin-top:7px}.unresolved-note{margin:7px 0 0}.chart-heading{border-top:1px solid var(--line);margin-top:16px;padding-top:13px;font-weight:600;font-size:12px}.trend-chart{width:100%;display:block;margin-top:8px}.chart-scroll{width:100%;overflow:hidden}
+.sheet-backdrop{position:fixed;inset:0;background:#0009;z-index:40;animation:fadeIn .23s ease}.action-sheet{position:fixed;z-index:41;bottom:0;left:50%;width:min(100%,700px);transform:translateX(-50%);background:var(--panel);border-radius:22px 22px 0 0;padding:12px 20px max(24px,env(safe-area-inset-bottom));box-shadow:0 -8px 40px #0003;animation:slideIn .25s ease}.sheet-backdrop.closing{opacity:0;transition:opacity .23s}.action-sheet.closing{transform:translate(-50%,110%);transition:transform .23s}.sheet-handle{width:38px;height:4px;border-radius:5px;background:var(--line);margin:0 auto 16px}.sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px}.sheet-tabs{margin-bottom:18px}.sheet-preview{display:flex;justify-content:space-between;align-items:center;padding:10px 0;color:var(--muted);font-size:12px}.sheet-preview strong{color:var(--text);font-size:14px}.action-sheet .primary{margin-top:14px}@keyframes slideIn{from{transform:translate(-50%,110%)}to{transform:translate(-50%,0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@media(max-width:390px){.compact-card{padding:11px 8px}.compact-card-row{gap:4px}.compact-name{font-size:12px}.used-now,.remaining-now{font-size:11px}.remaining-now small{font-size:9px}}
