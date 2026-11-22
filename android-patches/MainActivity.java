@@ -82,14 +82,4 @@ public class MainActivity extends BridgeActivity {
       container.requestApplyInsets();
     }
   }
-
-  @Override public void onResume() {
-    super.onResume();
-    makeSystemIconsVisible();
-  }
-
-  @Override public void onWindowFocusChanged(boolean hasFocus) {
-    super.onWindowFocusChanged(hasFocus);
-    if (hasFocus) makeSystemIconsVisible();
-  }
 }
