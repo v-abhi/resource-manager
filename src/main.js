@@ -31,6 +31,9 @@ const state = {
   to: "",
   showHidden: false,
   analyticsDays: 7,
+  analyticsMode: "7D",
+  customFrom: "",
+  customTo: "",
   expanded: null,
 };
 const esc = (s) =>
@@ -121,36 +124,113 @@ function all() {
   document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>go("edit",b.dataset.edit));
   document.querySelectorAll("[data-menu]").forEach(b=>b.onclick=async()=>{const r=getR(b.dataset.menu);if(!r)return;const choice=prompt(`${r.name}\nType ${r.archived?'RESTORE':'ARCHIVE'} to ${r.archived?'restore':'archive'} or DELETE to permanently remove:`);if(!choice)return;const action=choice.trim().toUpperCase();if(action===(r.archived?"RESTORE":"ARCHIVE")){await saveResource({...r,archived:!r.archived});await refresh();notify(r.archived?"Resource restored.":"Resource archived.")}else if(action==="DELETE"&&confirm(`Permanently delete ${r.name} and all its logs?`)){await removeResource(r.id);await refresh();notify("Resource deleted.")}});
 }
-function analytics() {
-  const days=state.analyticsDays;
-  const end=new Date(),start=new Date(end);start.setHours(0,0,0,0);start.setDate(start.getDate()-days+1);
-  const resourcesList=state.resources.filter(r=>!r.archived);
-  shell(`<div class="period-tabs">${[7,30,90].map(n=>`<button data-period="${n}" class="${days===n?'selected':''}">${n}D</button>`).join('')}</div><div class="compact-stack">${resourcesList.map(r=>`<section class="analytics-item"><button class="accordion-head" data-expand="${esc(r.id)}"><span>${esc(r.emoji||'◈')} &nbsp;${esc(r.name)}</span><span>${state.expanded===r.id?'⌃':'⌄'}</span></button>${state.expanded===r.id?analyticsDetail(r,start,end,days):''}</section>`).join('')||'<div class="empty">No resources yet.</div>'}</div>`);
-  document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{state.analyticsDays=Number(b.dataset.period);render()});
-  document.querySelectorAll('[data-expand]').forEach(b=>b.onclick=()=>{state.expanded=state.expanded===b.dataset.expand?null:b.dataset.expand;render()});
-  document.querySelectorAll('[data-chart-point]').forEach(b=>b.onclick=()=>{const p=JSON.parse(decodeURIComponent(b.dataset.chartPoint));notify(`${p.date}: ${fmt(p.pct,1)}% consumed · ${fmt(p.used)} used`)});
+function analyticsRange() {
+  const now = new Date();
+  const todayKey = localDay(now);
+  let fromKey, toKey = todayKey;
+  if (state.analyticsMode === "Custom") {
+    fromKey = state.customFrom;
+    toKey = state.customTo;
+    if (!fromKey || !toKey || fromKey > toKey || toKey > todayKey) return null;
+  } else {
+    const days = Number.parseInt(state.analyticsMode, 10) || 7;
+    const first = new Date(now);
+    first.setHours(0, 0, 0, 0);
+    first.setDate(first.getDate() - days + 1);
+    fromKey = localDay(first);
+  }
+  const start = new Date(`${fromKey}T00:00:00`);
+  const requestedEnd = new Date(`${toKey}T23:59:59.999`);
+  const end = new Date(Math.min(+requestedEnd, +now));
+  const keys = [];
+  for (const day = new Date(start); +day <= +end; day.setDate(day.getDate() + 1)) {
+    keys.push(localDay(day));
+    if (keys.length > 3660) return null;
+  }
+  return { start, end, keys, fromKey, toKey };
 }
-function analyticsDetail(r,start,end,days) {
-  const logs=logOf(r.id),s=evaluate(r,logs,end);
-  const dayKeys=Array.from({length:days},(_,i)=>{const d=new Date(start);d.setDate(start.getDate()+i);return localDay(d)});
-  const dailyUsed=new Map(dayKeys.map(k=>[k,0]));
-  logs.filter(l=>l.kind==='consume').forEach(l=>{const k=localDay(new Date(l.timestamp));if(dailyUsed.has(k))dailyUsed.set(k,dailyUsed.get(k)+Number(l.amount))});
-  const periods=s.periods.filter(p=>p.closed);
-  const expired=round(periods.filter(p=>{const date=localDay(new Date(p.end));return date>=dayKeys[0]&&date<=dayKeys.at(-1)}).reduce((a,p)=>a+p.lost,0));
-  const consumed=round([...dailyUsed.values()].reduce((a,b)=>a+b,0));
-  // Unresolved allocation is not expired; keep a neutral remainder in the bar.
-  const unresolved=Math.max(0,round(s.available));
-  const total=round(consumed+expired+unresolved);
-  const consumedPct=total>0?consumed/total*100:0,expiredPct=total>0?expired/total*100:0;
-  const trend=dayKeys.map(k=>{const used=dailyUsed.get(k)||0;const p=s.periods.find(p=>localDay(new Date(p.start))<=k&&localDay(new Date(p.end))>=k);const base=Math.max(0,(p?.opening??0)+(p?.added??0));return {date:k,used,pct:base>0?Math.min(100,used/base*100):0}});
-  const W=340,left=38,right=330,top=12,bottom=130;
-  const points=trend.map((d,i)=>({x:left+i*(right-left)/Math.max(1,days-1),y:bottom-d.pct*(bottom-top)/100,...d}));
-  const path=points.map((p,i)=>`${i?'L':'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-  const ticks=points.filter((p,i)=>{const d=new Date(`${p.date}T12:00:00`);return days===7||d.getDay()===0&&(days===30||Math.floor((i+7)/7)%2===0)});
-  const labels=ticks.map(p=>{const d=new Date(`${p.date}T12:00:00`);return `<text x="${p.x}" y="151" text-anchor="middle" font-size="${days===7?9:10}" fill="currentColor" opacity=".65">${days===7?d.getDate():`${d.getDate()} ${d.toLocaleString('en-GB',{month:'short'})}`}</text>`}).join('');
-  const grid=[0,25,50,75,100].map(v=>{const y=bottom-v*(bottom-top)/100;return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".12" stroke-dasharray="3 4"/><text x="30" y="${y+3}" text-anchor="end" font-size="10" fill="currentColor" opacity=".55">${v}%</text>`}).join('');
-  const dots=days===7?points.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="3" fill="#E9B949"/>`).join(''):'';
-  return `<div class="analytics-detail"><div class="kpi-row"><div><small>Total</small><strong>${unit(total,r)}</strong></div><div><small>Consumed</small><strong class="yellow-text">${unit(consumed,r)}</strong></div><div><small>Expired</small><strong class="red-text">${unit(expired,r)}</strong></div></div><div class="split-bar"><span class="bar-used" style="width:${consumedPct}%"></span><span class="bar-expired" style="width:${expiredPct}%"></span><span class="bar-unresolved" style="width:${Math.max(0,100-consumedPct-expiredPct)}%"></span></div><div class="bar-labels"><span class="yellow-text">${fmt(consumedPct,1)}% consumed</span><span class="red-text">${fmt(expiredPct,1)}% expired</span></div>${unresolved>0?`<p class="muted small unresolved-note">${unit(unresolved,r)} currently available (not expired)</p>`:''}<div class="chart-heading">Daily consumption trend</div><div class="chart-scroll"><svg class="trend-chart" viewBox="0 0 ${W} 165" role="img" aria-label="Daily consumption percentages for the last ${days} days">${grid}<path d="${path}" stroke="#E9B949" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>${dots}${labels}</svg></div><p class="muted small">Daily percentages use each day's resource-window allocation.</p></div>`;
+function analyticsStats(r, range) {
+  const logs = logOf(r.id);
+  const result = evaluate(r, logs, range.end);
+  const dayUsed = new Map(range.keys.map(k => [k, 0]));
+  for (const l of logs) {
+    if (l.kind !== "consume") continue;
+    const key = localDay(new Date(l.timestamp));
+    if (dayUsed.has(key) && +new Date(l.timestamp) <= +range.end) {
+      dayUsed.set(key, dayUsed.get(key) + Number(l.amount));
+    }
+  }
+  const consumed = round([...dayUsed.values()].reduce((a, b) => a + b, 0));
+  // Closed periods are counted by their actual ending date, not by the current balance.
+  const expired = round(result.periods.filter(p => p.closed &&
+    localDay(new Date(p.end)) >= range.fromKey &&
+    localDay(new Date(p.end)) <= range.toKey).reduce((sum, p) => sum + p.lost, 0));
+  // Available balance is unresolved only if this reporting window reaches the present.
+  const unresolved = range.toKey === localDay(new Date()) ? Math.max(0, result.available) : 0;
+  const total = round(consumed + expired + unresolved);
+  const consumedPct = total > 0 ? 100 * consumed / total : 0;
+  const expiredPct = total > 0 ? 100 * expired / total : 0;
+  const trend = range.keys.map(key => {
+    const used = dayUsed.get(key) || 0;
+    const periods = result.periods.filter(p => localDay(new Date(p.start)) <= key && localDay(new Date(p.end)) >= key);
+    const base = periods.reduce((sum, p) => sum + Math.max(0, p.opening + p.added), 0);
+    return { date: key, used, pct: base > 0 ? Math.min(100, 100 * used / base) : 0 };
+  });
+  return { consumed, expired, unresolved, total, consumedPct, expiredPct, trend };
+}
+function analytics() {
+  const range = analyticsRange();
+  const mode = state.analyticsMode;
+  const resourcesList = state.resources.filter(r => !r.archived);
+  const selector = `<div class="period-tabs analytics-tabs">${["7D","30D","90D","Custom"].map(n => `<button data-period="${n}" class="${mode === n ? 'selected' : ''}">${n}</button>`).join('')}</div>`;
+  const custom = mode === "Custom" ? `<form id="analytics-custom" class="analytics-custom"><label>From<input id="analytics-from" type="date" max="${today()}" value="${esc(state.customFrom)}" required></label><label>To<input id="analytics-to" type="date" max="${today()}" value="${esc(state.customTo)}" required></label><button type="submit" class="primary">Apply</button></form>` : '';
+  const list = range ? resourcesList.map(r => {
+    const stats = analyticsStats(r, range);
+    const open = state.expanded === r.id;
+    return `<section class="analytics-item"><div class="analytics-summary"><div class="analytics-summary-top"><span class="analytics-resource-name">${esc(r.emoji || '◈')} &nbsp;${esc(r.name)}</span><span class="analytics-percent analytics-consumed">${fmt(stats.consumedPct, 1)}%</span><span class="analytics-percent analytics-expired">${fmt(stats.expiredPct, 1)}%</span><button type="button" class="analytics-expand" data-expand="${esc(r.id)}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(r.name)}" aria-expanded="${open}">${open ? '⌃' : '⌄'}</button></div><div class="analytics-bar"><span class="analytics-bar-consumed" style="width:${stats.consumedPct}%"></span><span class="analytics-bar-expired" style="width:${stats.expiredPct}%"></span><span class="analytics-bar-rest" style="width:${Math.max(0,100-stats.consumedPct-stats.expiredPct)}%"></span></div></div>${open ? analyticsDetail(r, stats, range) : ''}</section>`;
+  }).join('') : '<div class="empty">Choose a valid date range and tap Apply.</div>';
+  shell(`${selector}${custom}<div class="analytics-legend"><span><i class="dot yellow"></i>Consumed</span><span><i class="dot red"></i>Expired</span></div><div class="compact-stack">${list || '<div class="empty">No resources yet.</div>'}</div>`);
+  document.querySelectorAll('[data-period]').forEach(b => b.onclick = () => {
+    state.analyticsMode = b.dataset.period;
+    if (state.analyticsMode === 'Custom' && !state.customFrom) {
+      state.customFrom = today(); state.customTo = today();
+    }
+    render();
+  });
+  $('#analytics-custom')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const from = $('#analytics-from').value, to = $('#analytics-to').value;
+    if (!from || !to || from > to || to > today()) return notify('Choose a valid date range.', true);
+    state.customFrom = from; state.customTo = to; render();
+  });
+  document.querySelectorAll('[data-expand]').forEach(b => b.onclick = () => {
+    state.expanded = state.expanded === b.dataset.expand ? null : b.dataset.expand;
+    render();
+  });
+  document.querySelectorAll('[data-chart-point]').forEach(b => b.onclick = () => {
+    const p = JSON.parse(decodeURIComponent(b.dataset.chartPoint));
+    notify(`${p.date}: ${fmt(p.pct, 1)}% consumed · ${fmt(p.used)} used`);
+  });
+}
+function analyticsDetail(r, stats, range) {
+  const { total, consumed, expired, unresolved, trend } = stats;
+  const days = trend.length;
+  const W = 340, left = 38, right = 330, top = 12, bottom = 130;
+  const points = trend.map((d, i) => ({ x: left + i * (right - left) / Math.max(1, days - 1), y: bottom - d.pct * (bottom - top) / 100, ...d }));
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+  const sundays = points.filter(p => new Date(`${p.date}T12:00:00`).getDay() === 0);
+  const step = days <= 7 ? 1 : days <= 45 ? 1 : Math.max(2, Math.ceil(sundays.length / 7));
+  const ticks = days <= 7 ? points : sundays.filter((p, i) => i % step === 0);
+  const labels = ticks.map(p => {
+    const d = new Date(`${p.date}T12:00:00`);
+    return `<text x="${p.x}" y="151" text-anchor="middle" font-size="${days <= 7 ? 9 : 10}" fill="currentColor" opacity=".65">${days <= 7 ? d.getDate() : `${d.getDate()} ${d.toLocaleString('en-GB', {month:'short'})}`}</text>`;
+  }).join('');
+  const grid = [0,25,50,75,100].map(v => {
+    const y = bottom - v * (bottom - top) / 100;
+    return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".12" stroke-dasharray="3 4"/><text x="30" y="${y + 3}" text-anchor="end" font-size="10" fill="currentColor" opacity=".55">${v}%</text>`;
+  }).join('');
+  const dots = days <= 7 ? points.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3" fill="#E9B949"/>`).join('') : '';
+  return `<div class="analytics-detail"><div class="kpi-row"><div><small>Total</small><strong>${unit(total,r)}</strong></div><div><small>Consumed</small><strong class="yellow-text">${unit(consumed,r)}</strong></div><div><small>Expired</small><strong class="red-text">${unit(expired,r)}</strong></div></div>${unresolved > 0 ? `<p class="muted small unresolved-note">${unit(unresolved,r)} currently available (not expired)</p>` : ''}<div class="chart-heading">Daily consumption trend</div><div class="chart-scroll"><svg class="trend-chart" viewBox="0 0 ${W} 165" role="img" aria-label="Daily consumption percentages over selected date range">${grid}<path d="${path}" stroke="#E9B949" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none"/>${dots}${labels}</svg></div><p class="muted small">Daily percentages use each day's resource-window allocation.</p></div>`;
 }
 function edit() {
   const existing = state.id ? getR(state.id) : null;

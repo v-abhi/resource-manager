@@ -687,11 +687,10 @@ h3 {
 @media(max-width:390px){.compact-card{padding:11px 8px}.compact-card-row{gap:4px}.compact-name{font-size:12px}.used-now,.remaining-now{font-size:11px}.remaining-now small{font-size:9px}}
 
 
-/* Home card alignment */
+/* Home card alignment and separated progress segments */
 .compact-card-row {
   display: grid;
-  grid-template-columns:
-    24px minmax(0, 1fr) 92px 114px;
+  grid-template-columns: 24px minmax(0, 1fr) 92px 114px;
   align-items: center;
   column-gap: 7px;
   min-width: 0;
@@ -713,7 +712,7 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* Gap between yellow and green */
+/* The gap uses the card's dark background instead of a colored divider. */
 .compact-card .split-bar {
   display: flex;
   gap: 3px;
@@ -728,21 +727,40 @@ h3 {
   border-radius: 50px;
 }
 
-/* No gap if one segment is empty */
-.compact-card .split-bar:has(
-  .bar-used[style*="width:0%"]
-),
-.compact-card .split-bar:has(
-  .bar-left[style*="width:0%"]
-) {
+/* No gap when one of the segments has zero width. */
+.compact-card .split-bar:has(.bar-used[style*="width:0%"]),
+.compact-card .split-bar:has(.bar-left[style*="width:0%"]) {
   gap: 0;
 }
 
 @media (max-width: 390px) {
   .compact-card-row {
-    grid-template-columns:
-      24px minmax(0, 1fr) 82px 102px;
+    grid-template-columns: 24px minmax(0, 1fr) 82px 102px;
     column-gap: 4px;
   }
 }
 
+/* Analytics compact summary, expanded detail, and custom date range */
+.analytics-tabs button { min-width: 0; font-size: 12px; padding: 9px 3px; }
+.analytics-legend { display: flex; justify-content: flex-end; gap: 16px; align-items: center; color: var(--muted); font-size: 11px; margin: 0 2px 10px; }
+.analytics-legend span { display: inline-flex; gap: 5px; align-items: center; }
+.analytics-legend .dot.red { background: #E47A7A; }
+.analytics-summary { padding: 12px 12px 11px; }
+.analytics-summary-top { display: grid; grid-template-columns: minmax(0,1fr) 55px 55px 30px; gap: 6px; align-items: center; }
+.analytics-resource-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 650; }
+.analytics-percent { text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.analytics-consumed { color: #C5A75A; }
+.analytics-expired { color: #C78B8B; }
+.analytics-expand { height: 29px; width: 29px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: var(--muted); font-size: 19px; }
+.analytics-bar { display: flex; gap: 3px; width: 100%; height: 7px; margin-top: 11px; }
+.analytics-bar > span { display: block; min-width: 0; height: 7px; border-radius: 99px; }
+.analytics-bar > span[style*="width:0%"] { display: none; }
+.analytics-bar-consumed { background: #E9B949; }
+.analytics-bar-expired { background: #E47A7A; }
+.analytics-bar-rest { background: var(--line); }
+.analytics-detail { border-top: 1px solid var(--line); padding-top: 11px; }
+.analytics-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; align-items: end; margin-bottom: 12px; }
+.analytics-custom label { min-width: 0; font-size: 11px; color: var(--muted); }
+.analytics-custom input { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; padding: 9px 4px; font-size: 12px; }
+.analytics-custom button { grid-column: 1 / -1; }
+@media (max-width: 360px) { .analytics-summary-top { grid-template-columns: minmax(0,1fr) 46px 46px 28px; gap: 4px; } .analytics-percent { font-size: 12px; } }
