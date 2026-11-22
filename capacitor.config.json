@@ -1,0 +1,6 @@
+{
+  "appId":"com.personal.resourcemanager",
+  "appName":"Resource Manager",
+  "webDir":"dist",
+  "bundledWebRuntime":false
+}
